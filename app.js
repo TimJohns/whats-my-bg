@@ -144,9 +144,14 @@ app.get('/auth', async (req, res, next) => {
     console.log(JSON.stringify({rangeResponse: rangeResponse.data}));
 
     const rangeEnd = moment.utc(rangeResponse.data.egvs.end.systemTime);
-    const rangeStart = moment.utc(rangeResponse.data.egvs.end.systemTime).subtract(30, 'minutes');
+    const rangeStart = moment.utc(rangeResponse.data.egvs.end.systemTime).subtract(3, 'hours');
 
-    const egvsURL = `https://sandbox-api.dexcom.com/v2/users/self/egvs?startDate=${rangeStart.format()}&endDate=${rangeEnd.format()}`;
+    const DEXCOM_TIMESTAMP_FORMAT = "YYYY-MM-DDTHH:mm:ss";
+
+    const egvsURL = `https://sandbox-api.dexcom.com/v2/users/self/egvs?startDate=${rangeStart.format(DEXCOM_TIMESTAMP_FORMAT)}&endDate=${rangeEnd.format(DEXCOM_TIMESTAMP_FORMAT)}`;
+
+    console.log(`egvsURL: ${egvsURL}`);
+
     const dataResponse = await axios(
       {
       method: 'get',
