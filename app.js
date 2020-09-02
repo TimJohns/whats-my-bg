@@ -4,7 +4,6 @@ const express = require('express');
 const {PubSub} = require('@google-cloud/pubsub');
 const bodyParser = require('body-parser');
 const {SecretManagerServiceClient} = require('@google-cloud/secret-manager');
-const {verifyRequestSignature} = require('@slack/events-api');
 const {GoogleAuth} = require('google-auth-library');
 const axios = require('axios');
 const qs = require('qs');
@@ -56,16 +55,10 @@ async function createDecipher() {
 
 const app = express();
 
-// TODO(tjohns): rawBodySaver, while a prolific hack, is still a hack
-// Consider a PR for body-parser that leaves the rawBody in place, or
-// make the 'verify' async
-function rawBodySaver (req, res, buf, encoding) {
-  if (buf && buf.length) {
-    req.rawBody = buf.toString(encoding || 'utf8')
-  }
-}
 
-app.use(bodyParser.urlencoded({ extended: true, verify: rawBodySaver}));
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
+
 app.set('view engine', 'ejs');
 
 
@@ -200,6 +193,30 @@ app.get('/authfailed', async (req, res, next) => {
   }
 });
 
+
+app.post('/fulfill', async (req, res, next) => {
+  try {
+    console.log(JSON.stringify({headers: req.headers}));
+    console.log(JSON.stringify({WebhookRequest: req.body}));
+
+    const idToken = reg.body.originalDetectIntentRequest.payload.user.idToken;
+
+
+    res.status(200).json({
+      "fulfillmentMessages": [
+        {
+          "text": {
+            "text": [
+              "120 on the Money Honey"
+            ]
+          }
+        }
+      ]
+    });
+  } catch(error) {
+    next(error);
+  }
+});
 
 
 // Start the server
