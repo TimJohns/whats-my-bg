@@ -227,9 +227,13 @@ app.get('/auth/dexcom/callback', async (req, res, next) => {
     // TODO(tjohns) Remove this log statement.
     console.log(JSON.stringify({exchangeResponse: exchangeResponse.data}));
 
-    req.user.dexcom = exchangeResponse.data;
+    req.user.data.dexcom = exchangeResponse.data;
 
-    const latestEGVS = await getLatestEGVS(req.user.dexcom.access_token);
+    console.log(JSON.stringify({updateUser: req.user}));
+
+    await datastore.update(req.user);
+
+    const latestEGVS = await getLatestEGVS(req.user.data.dexcom.access_token);
 
     res.redirect(`/authsuccess?${qs.stringify({value: latestEGVS.value})}`);
 
