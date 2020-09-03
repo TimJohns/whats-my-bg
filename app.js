@@ -9,12 +9,19 @@ const axios = require('axios');
 const qs = require('qs');
 const crypto = require('crypto');
 const {Datastore} = require('@google-cloud/datastore');
+const {DatastoreStore} = require('@google-cloud/connect-datastore');
 const moment = require('moment');
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const session = require('express-session');
 
 const pubSubClient = new PubSub();
 const secretManagerServiceClient = new SecretManagerServiceClient();
 const auth = new GoogleAuth();
 const datastore = new Datastore();
+const datastorestore = new DatastoreStore({
+  dataset: datastore
+});
 
 const secrets = new Map();
 async function getSecret(secretName) {
@@ -62,17 +69,105 @@ app.use(bodyParser.json());
 app.set('view engine', 'ejs');
 
 
+// TODO(tjohns): Figure out how to 'await' the secret
+// TODO(tjohns): Parameterize URL
+passport.use(new GoogleStrategy({
+  clientID: process.env.GOOGLE_CLIENT_ID,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  callbackURL: "https://whatsmybg.uc.r.appspot.com/auth/google/callback"
+},
+function(accessToken, refreshToken, profile, cb) {
+  const query = datastore
+    .createQuery('User')
+    .filter('google.profile.id', profile.id)
+    .limit(1);
+
+  datastore.runQuery(query)
+    .then(([userEntities]) => {
+      console.log(JSON.stringify({verifyUserEntities: userEntities}));
+      if (userEntities && userEntities[0]) {
+        return cb(null, {key: userEntities[0][datastore.KEY], data: userEntities[0]});
+      } else {
+        const userKey = datastore.key('User');
+        const user = {
+          google: {
+            accessToken,
+            refreshToken,
+            profile
+          }
+        };
+
+        const entity = {
+          key: userKey,
+          data: user,
+        };
+
+        console.log(JSON.stringify({insertEntity: entity}));
+        datastore.insert(entity).then(() => {
+          return cb(null, entity);
+        }).catch((err) => {
+          console.error('Error saving new user.', err);
+          return cb(err);
+        });
+
+      }
+    })
+    .catch((err => {
+      console.error('Error looking up user.', err);
+      return cb(err);
+    }));
+}
+));
+
+passport.serializeUser(function(user, cb) {
+  console.log(JSON.stringify({serializeUser: user}));
+  cb(null, user.key.id);
+});
+
+passport.deserializeUser(function(id, cb) {
+  console.log(JSON.stringify({deserializeUserId: id}));
+  const key = datastore.key(['User', datastore.int(id)]);
+  datastore.get(key)
+  .then(([userEntity]) => {
+    console.log(JSON.stringify({deserializeUserEntity: userEntity}));
+    cb(null, {key, data: userEntity});
+  })
+  .catch((err) => {
+    console.error('Error retrieving user while deserializing from session:', err);
+    cb(err);
+  });
+});
+
+app.set('trust proxy', 1) // trust first proxy (app engine terminates TLS before us)
+
+// TODO(tjohns): Figure out how to 'await' the secret
+app.use(session({
+  cookie: {
+    httpOnly: true,
+    secure: true,
+  },
+  name: "whatsmybg.sid",
+  resave: false,
+  saveUninitialized: false,
+  store: datastorestore,
+  secret: process.env.SESSION_SECRET
+}));
+
+// Initialize Passport and restore authentication state, if any, from the
+// session.
+app.use(passport.initialize());
+app.use(passport.session());
+
 app.get('/', async (req, res, next) => {
+  console.log(JSON.stringify({installUser: req.user}));
   try {
-    res.render('install', {dexcom_client_id: process.env.DEXCOM_CLIENT_ID});
+    res.render('install', {user: req.user, dexcom_client_id: process.env.DEXCOM_CLIENT_ID});
   } catch(error) {
     next(error);
   }
 })
 
-
-
-app.get('/slackappprivacy', async (req, res, nex) => {
+app.get('/privacy', async (req, res, nex) => {
   try {
     res.render('privacy');
   } catch(error) {
@@ -80,7 +175,7 @@ app.get('/slackappprivacy', async (req, res, nex) => {
   }
 })
 
-app.get('/slackappsupport', async (req, res, nex) => {
+app.get('/support', async (req, res, nex) => {
   try {
     res.render('support');
   } catch(error) {
@@ -88,8 +183,20 @@ app.get('/slackappsupport', async (req, res, nex) => {
   }
 })
 
+app.get('/auth/google',
+  passport.authenticate('google', { scope: ['profile'] }));
 
-app.get('/auth', async (req, res, next) => {
+app.get('/auth/google/callback',
+  passport.authenticate('google', { failureRedirect: '/' }),
+  function(req, res) {
+    // Successful authentication, redirect home.
+    res.redirect('/');
+  });
+
+app.get('/auth/dexcom/callback', async (req, res, next) => {
+
+  // If we're not logged in, this makes no sense to us, let someone else handle it (or not).
+  if (!req.user) { next(); return; }
 
   try {
 
@@ -112,7 +219,7 @@ app.get('/auth', async (req, res, next) => {
         client_id: process.env.DEXCOM_CLIENT_ID,
         client_secret: await getSecret('dexcom_client_secret'),
         grant_type: 'authorization_code',
-        redirect_uri: 'https://whatsmybg.uc.r.appspot.com/auth',
+        redirect_uri: 'https://whatsmybg.uc.r.appspot.com/auth/dexcom/callback',
         code: req.query.code
       })
     });
@@ -120,10 +227,18 @@ app.get('/auth', async (req, res, next) => {
     // TODO(tjohns) Remove this log statement.
     console.log(JSON.stringify({exchangeResponse: exchangeResponse.data}));
 
-    // TODO(tjohns): Everyting from here down should be somewhere else rather than in the
-    // authorization response path
-    const access_token = exchangeResponse.data.access_token;
-    const refresh_token = exchangeResponse.data.refresh_token;
+    req.user.dexcom = exchangeResponse.data;
+
+    const latestEGVS = await getLatestEGVS(req.user.dexcom.access_token);
+
+    res.redirect(`/authsuccess?${qs.stringify({value: latestEGVS.value})}`);
+
+  } catch(error) {
+    next(error);
+  }
+});
+
+async function getLatestEGVS(access_token) {
 
     const rangeResponse = await axios(
       {
@@ -157,25 +272,8 @@ app.get('/auth', async (req, res, next) => {
     // TODO(tjohns) Remove this log statement.
     console.log(JSON.stringify({dataResponse: dataResponse.data}));
 
-    var latestEGVS = dataResponse.data.egvs[dataResponse.data.egvs.length - 1];
-
-    // TODO(tjohns): Provide some context on how the installation was handled;
-    // in other words, let the user know which of these scenarios they're in:
-    //   Installed with no API token specified
-    //      With the default token only
-    //      With an existing team-wide token
-    //   Installed with an individual API token specified
-    //   Installed with a team-wide API token specified
-    //      With an existing team-wide API token
-    //      With the specified token now used for tean-wide access
-    // Provide the user some instruction on how to fix what they did, if
-    // it wasn't what they intended.
-    res.redirect(`/authsuccess?${qs.stringify({value: latestEGVS.value})}`);
-
-  } catch(error) {
-    next(error);
-  }
-});
+    return dataResponse.data.egvs[dataResponse.data.egvs.length - 1];
+}
 
 app.get('/authsuccess', async (req, res, next) => {
   try {

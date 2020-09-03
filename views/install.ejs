@@ -11,10 +11,13 @@
       <p>If you provide an optional what's my bg API key, the summaries of API usage will be shown in the associated dashboard, and requests made will be limited by your own quota rather than a shared quota.</p>
       <p>If you don't provide a key, the what's my bg App will function, but the quota is shared among others in the community who also did not provide an API key, and you won't be able to see usage stats in your dashboard.</p>
       <p>If you change your mind later, you can reinstall the what's my bg App.</p>
-
-      <a href="https://sandbox-api.dexcom.com/v2/oauth2/login?client_id=<%=dexcom_client_id%>&redirect_uri=https%3A%2F%2Fwhatsmybg.uc.r.appspot.com%2Fauth&response_type=code&scope=offline_access">Authorize</a>
-
-
+      <% if (!user) { %>
+        <a href="/auth/google">Sign In with Google</a>
+      <% } else if (!user.data.dexcom) { %>
+        <a href="https://sandbox-api.dexcom.com/v2/oauth2/login?client_id=<%=dexcom_client_id%>&redirect_uri=https%3A%2F%2Fwhatsmybg.uc.r.appspot.com%2Fauth%2Fdexcom%2Fcallback&response_type=code&scope=offline_access">Link Dexcom Account</a>
+      <% } else { %>
+        <a href="latest">What's My BG?</a>
+      <% } %>
     </div>
     <%- include ('partials/bodylast') %>
   </body>
