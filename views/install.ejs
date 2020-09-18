@@ -14,7 +14,7 @@
       <% if (!user) { %>
         <a href="/auth/google">Sign In with Google</a>
       <% } else if (!user.data.dexcom) { %>
-        <a href="https://sandbox-api.dexcom.com/v2/oauth2/login?client_id=<%=dexcom_client_id%>&redirect_uri=https%3A%2F%2Fwhatsmybg.uc.r.appspot.com%2Fauth%2Fdexcom%2Fcallback&response_type=code&scope=offline_access">Link Dexcom Account</a>
+        <a href=<%=dexcomAuthURL%>>Link Dexcom Account</a>
       <% } else { %>
         <a href="latest">What's My BG?</a>
       <% } %>

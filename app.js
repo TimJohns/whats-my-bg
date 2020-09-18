@@ -1,5 +1,25 @@
 'use strict';
 
+const CIPHER_ALGORITHM = 'aes-256-cbc';
+const CIPHER_KEY_SECRET_NAME = 'cipher_key';
+const CIPHER_IV = process.env.CIPHER_IV;
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+// TODO(tjohns): Figure out a good way to 'await' GOOGLE_CLIENT_SECRET from Secret Manager
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const GOOGLE_CALLBACK_URL = process.env.GOOGLE_CALLBACK_URL;
+const GOOGLE_ACTIONS_CLIENT_ID = process.env.GOOGLE_ACTIONS_CLIENT_ID;
+
+const SESSION_COOKIE_NAME = "whatsmybg.sid";
+// TODO(tjohns): Figure out a good way to 'await' SESSION_SECRET from Secret Manager
+const SESSION_SECRET = process.env.SESSION_SECRET;
+
+const DEXCOM_CLIENT_ID = process.env.DEXCOM_CLIENT_ID;
+const DEXCOM_API_URL = process.env.DEXCOM_API_URL;
+const DEXCOM_REDIRECT_URI = process.env.DEXCOM_REDIRECT_URI;
+const DEXCOM_TIMESTAMP_FORMAT = "YYYY-MM-DDTHH:mm:ss";
+const DEXCOM_EVGS_LOOKBACK_HOURS = 4;
+
 const express = require('express');
 const {PubSub} = require('@google-cloud/pubsub');
 const bodyParser = require('body-parser');
@@ -14,6 +34,7 @@ const moment = require('moment');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const session = require('express-session');
+const { text } = require('body-parser');
 
 const pubSubClient = new PubSub();
 const secretManagerServiceClient = new SecretManagerServiceClient();
@@ -43,21 +64,13 @@ async function getSecret(secretName) {
 }
 
 async function createCipher() {
-
-  const key = await getSecret('cipher_key');
-  const algorithm = 'aes-256-cbc';
-  const iv = process.env.CIPHER_IV;
-
-  return crypto.createCipheriv(algorithm, key, iv);
+  const key = await getSecret(CIPHER_KEY_SECRET_NAME);
+  return crypto.createCipheriv(CIPHER_ALGORITHM, key, CIPHER_IV);
 };
 
 async function createDecipher() {
-
-  const key = await getSecret('cipher_key');
-  const algorithm = 'aes-256-cbc';
-  const iv = process.env.CIPHER_IV;
-
-  return crypto.createDecipheriv(algorithm, key, iv);
+  const key = await getSecret(CIPHER_KEY_SECRET_NAME);
+  return crypto.createDecipheriv(CIPHER_ALGORITHM, key, CIPHER_IV);
 };
 
 const app = express();
@@ -68,13 +81,10 @@ app.use(bodyParser.json());
 
 app.set('view engine', 'ejs');
 
-
-// TODO(tjohns): Figure out how to 'await' the secret
-// TODO(tjohns): Parameterize URL
 passport.use(new GoogleStrategy({
-  clientID: process.env.GOOGLE_CLIENT_ID,
-  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: "https://whatsmybg.uc.r.appspot.com/auth/google/callback"
+  clientID: GOOGLE_CLIENT_ID,
+  clientSecret: GOOGLE_CLIENT_SECRET,
+  callbackURL: GOOGLE_CALLBACK_URL
 },
 function(accessToken, refreshToken, profile, cb) {
   const query = datastore
@@ -140,28 +150,26 @@ passport.deserializeUser(function(id, cb) {
 
 app.set('trust proxy', 1) // trust first proxy (app engine terminates TLS before us)
 
-// TODO(tjohns): Figure out how to 'await' the secret
 app.use(session({
   cookie: {
     httpOnly: true,
     secure: true,
   },
-  name: "whatsmybg.sid",
+  name: SESSION_COOKIE_NAME,
   resave: false,
   saveUninitialized: false,
   store: datastorestore,
-  secret: process.env.SESSION_SECRET
+  secret: SESSION_SECRET
 }));
 
-// Initialize Passport and restore authentication state, if any, from the
-// session.
 app.use(passport.initialize());
 app.use(passport.session());
 
 app.get('/', async (req, res, next) => {
   console.log(JSON.stringify({installUser: req.user}));
   try {
-    res.render('install', {user: req.user, dexcom_client_id: process.env.DEXCOM_CLIENT_ID});
+    const dexcomAuthURL = `${DEXCOM_API_URL}/v2/oauth2/login?client_id=${encodeURIComponent(DEXCOM_CLIENT_ID)}&redirect_uri=${encodeURIComponent(DEXCOM_REDIRECT_URI)}&response_type=code&scope=offline_access`;
+    res.render('install', {user: req.user, dexcomAuthURL});
   } catch(error) {
     next(error);
   }
@@ -206,20 +214,19 @@ app.get('/auth/dexcom/callback', async (req, res, next) => {
       return;
     }
 
-    // TODO(tjohns): Parameterize URL
     const exchangeResponse = await axios(
       {
       method: 'post',
-      url: 'https://sandbox-api.dexcom.com/v2/oauth2/token',
+      url: `${DEXCOM_API_URL}/v2/oauth2/token`,
       headers: {
         'content-type': 'application/x-www-form-urlencoded',
         'cache-control': 'no-cache'
       },
       data: qs.stringify({
-        client_id: process.env.DEXCOM_CLIENT_ID,
+        client_id: DEXCOM_CLIENT_ID,
         client_secret: await getSecret('dexcom_client_secret'),
         grant_type: 'authorization_code',
-        redirect_uri: 'https://whatsmybg.uc.r.appspot.com/auth/dexcom/callback',
+        redirect_uri: DEXCOM_REDIRECT_URI,
         code: req.query.code
       })
     });
@@ -247,7 +254,7 @@ async function getLatestEGVS(access_token) {
     const rangeResponse = await axios(
       {
       method: 'get',
-      url: 'https://sandbox-api.dexcom.com/v2/users/self/dataRange',
+      url: `${DEXCOM_API_URL}/v2/users/self/dataRange`,
       headers: {
         'authorization': `Bearer ${access_token}`,
       }
@@ -256,11 +263,9 @@ async function getLatestEGVS(access_token) {
     console.log(JSON.stringify({rangeResponse: rangeResponse.data}));
 
     const rangeEnd = moment.utc(rangeResponse.data.egvs.end.systemTime);
-    const rangeStart = moment.utc(rangeResponse.data.egvs.end.systemTime).subtract(3, 'hours');
+    const rangeStart = moment.utc(rangeResponse.data.egvs.end.systemTime).subtract(DEXCOM_EVGS_LOOKBACK_HOURS, 'hours');
 
-    const DEXCOM_TIMESTAMP_FORMAT = "YYYY-MM-DDTHH:mm:ss";
-
-    const egvsURL = `https://sandbox-api.dexcom.com/v2/users/self/egvs?startDate=${rangeStart.format(DEXCOM_TIMESTAMP_FORMAT)}&endDate=${rangeEnd.format(DEXCOM_TIMESTAMP_FORMAT)}`;
+    const egvsURL = `${DEXCOM_API_URL}/v2/users/self/egvs?startDate=${rangeStart.format(DEXCOM_TIMESTAMP_FORMAT)}&endDate=${rangeEnd.format(DEXCOM_TIMESTAMP_FORMAT)}`;
 
     console.log(`egvsURL: ${egvsURL}`);
 
@@ -276,7 +281,11 @@ async function getLatestEGVS(access_token) {
     // TODO(tjohns) Remove this log statement.
     console.log(JSON.stringify({dataResponse: dataResponse.data}));
 
-    return dataResponse.data.egvs[dataResponse.data.egvs.length - 1];
+    const latest = dataResponse.data.egvs[dataResponse.data.egvs.length - 1];
+
+    latest.unit = dataResponse.data.unit;
+
+    return latest;
 }
 
 app.get('/authsuccess', async (req, res, next) => {
@@ -301,20 +310,141 @@ app.post('/fulfill', async (req, res, next) => {
     console.log(JSON.stringify({headers: req.headers}));
     console.log(JSON.stringify({WebhookRequest: req.body}));
 
-    const idToken = reg.body.originalDetectIntentRequest.payload.user.idToken;
+    const idToken = req.body.originalDetectIntentRequest.payload.user.idToken;
+    const client = await auth.getClient();
 
+    const ticket = await client.verifyIdToken({
+        idToken,
+        audience: GOOGLE_ACTIONS_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
 
-    res.status(200).json({
-      "fulfillmentMessages": [
-        {
-          "text": {
-            "text": [
-              "120 on the Money Honey"
-            ]
+    // TODO(tjohns): Delete this log message
+    console.log(JSON.stringify({payload}));
+
+    const userid = payload['sub'];
+
+    // TODO(tjohns): Would 'sub' be more appropriate than google.profile.id?
+    const query = datastore
+      .createQuery('User')
+      .filter('google.profile.id', userid)
+      .limit(1);
+
+    const [userEntities] = await datastore.runQuery(query);
+
+    // TODO(tjohns): Delete this log message
+    console.log(JSON.stringify({userEntities}));
+
+    const userEntity = userEntities[0];
+
+    // TODO(tjohns): Delete this log message
+    console.log(JSON.stringify({userEntity}));
+
+    if (!userEntity) {
+      console.error(`Error: Google User not found: ${userId}`);
+      // TODO(tjohns): Return an appropriate fulfillment message here
+      res.status(200).json({
+        "payload": {
+          "google": {
+            "expectUserResponse": true,
+            "richResponse": {
+              "items": [
+                {
+                  "simpleResponse": {
+                    "textToSpeech": "I don't know you."
+                  }
+                }
+              ]
+            }
           }
         }
-      ]
-    });
+      });
+
+    } else {
+
+      async function getLatestEGVSWithTokenRefresh(userEntity) {
+
+        async function refreshDexcomAccessToken(userEntity) {
+          // call dexcom
+          const refreshResponse = await axios(
+            {
+            method: 'post',
+            url: `${DEXCOM_API_URL}/v2/oauth2/token`,
+            headers: {
+              'content-type': 'application/x-www-form-urlencoded',
+              'cache-control': 'no-cache'
+            },
+            data: qs.stringify({
+              client_id: DEXCOM_CLIENT_ID,
+              client_secret: await getSecret('dexcom_client_secret'),
+              grant_type: 'refresh_token',
+              redirect_uri: DEXCOM_REDIRECT_URI,
+              refresh_token: userEntity.dexcom.refresh_token
+            })
+          });
+
+          // TODO(tjohns) Remove this log statement.
+          console.log(JSON.stringify({refreshResponse: refreshResponse.data}));
+
+          // write it down.
+          userEntity.dexcom = refreshResponse.data;
+
+          await datastore.update(userEntity);
+        }
+
+        try {
+          return await getLatestEGVS(userEntity.dexcom.access_token);
+        } catch(error) {
+
+          if (error.response.status != 401) {
+            throw error;
+          }
+
+          // If at first you don't succeed, you're access_token is probably expired.
+
+          // Get a new access_token (and save it)
+          await refreshDexcomAccessToken(userEntity);
+
+          // Try again.
+          return await getLatestEGVS(userEntity.dexcom.access_token);
+        }
+      };
+
+      const latestEGVS = await getLatestEGVSWithTokenRefresh(userEntity);
+
+      // TODO(tjohns): Delete this log message
+      console.log(JSON.stringify({latestEGVS}));
+
+      let textToSpeech = `I didn't get an estimated glucose value from Dexcom that was within the last ${DEXCOM_EVGS_LOOKBACK_HOURS} hours. Please confirm your sensor is working and try again.`;
+      if (latestEGVS && latestEGVS.value) {
+        textToSpeech = latestEGVS.value;
+        if (latestEGVS.unit) {
+          textToSpeech += " " + latestEGVS.unit;
+        }
+        if (latestEGVS.displayTime) {
+          textToSpeech += " at " + moment(latestEGVS.displayTime).format("h:mm a [on] dddd, MMMM Do");
+        }
+      }
+
+      res.status(200).json({
+        "payload": {
+          "google": {
+            "expectUserResponse": true,
+            "richResponse": {
+              "items": [
+                {
+                  "simpleResponse": {
+                    textToSpeech
+                  }
+                }
+              ]
+            }
+          }
+        }
+      });
+
+    }
+
   } catch(error) {
     next(error);
   }
