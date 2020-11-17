@@ -61,4 +61,4 @@ typings/
 .next
 
 #app.yaml
-app.yaml
+app.*.yaml
