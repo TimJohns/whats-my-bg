@@ -7,10 +7,6 @@
   <body>
     <div class="container">
       <h1>Authorization</h1>
-
-      <p>If you provide an optional what's my bg API key, the summaries of API usage will be shown in the associated dashboard, and requests made will be limited by your own quota rather than a shared quota.</p>
-      <p>If you don't provide a key, the what's my bg App will function, but the quota is shared among others in the community who also did not provide an API key, and you won't be able to see usage stats in your dashboard.</p>
-      <p>If you change your mind later, you can reinstall the what's my bg App.</p>
       <% if (!user) { %>
         <a href="/auth/google">Sign In with Google</a>
       <% } else if (!user.data.dexcom) { %>
