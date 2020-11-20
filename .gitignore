@@ -60,5 +60,8 @@ typings/
 # next.js build output
 .next
 
-#app.yaml
+# Google App Engine app.yaml
 app.*.yaml
+
+# TypeScript Build Output
+dist
