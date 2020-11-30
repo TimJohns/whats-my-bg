@@ -119,7 +119,7 @@ class DialogFlowFulfillmentControllerImpl implements DialogFlowFulfillmentContro
       res.status(200).json({
         "payload": {
           "google": {
-            "expectUserResponse": true,
+            "expectUserResponse": false,
             "richResponse": {
               "items": [
                 {
