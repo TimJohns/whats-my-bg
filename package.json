@@ -16,7 +16,7 @@
     "gcp-build": "npm run build"
   },
   "dependencies": {
-    "@google-cloud/connect-datastore": "^5.0.1",
+    "@google-cloud/connect-datastore": "git+https://github.com/googleapis/nodejs-datastore-session.git#33028da1b48b88258c7c146dce55149698d5c0cd",
     "@google-cloud/datastore": "^6.1.0",
     "@google-cloud/pubsub": "^2.3.0",
     "@google-cloud/secret-manager": "^3.1.0",

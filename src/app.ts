@@ -48,15 +48,6 @@ declare global {
     status?: number
     statusCode?: number
   }
-
-  // Adding SessionData to Express is a workaround;
-  // see https://github.com/googleapis/nodejs-datastore-session/issues/246
-  namespace Express {
-    interface SessionData {
-      cookie: any
-    }
-  }
-
 }
 
 class WhatsMyBGApp {
